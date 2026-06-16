@@ -1,5 +1,6 @@
 import base64
 import io
+import re
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -9,6 +10,37 @@ import config
 class Minecraft(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+
+    def motd_to_ansi(self, description) -> str:
+        """Converts Minecraft legacy section codes (§) to Discord ANSI color sequences."""
+        if isinstance(description, str):
+            text = description
+        elif isinstance(description, dict):
+            text = description.get("text", "")
+            if "extra" in description:
+                text += "".join([part.get("text", "") for part in description["extra"] if isinstance(part, dict)])
+        else:
+            text = str(description)
+
+        # Mapping Minecraft section codes to ANSI escape codes
+        color_map = {
+            '0': '\u001b[0;30m', '1': '\u001b[0;34m', '2': '\u001b[0;32m', '3': '\u001b[0;36m',
+            '4': '\u001b[0;31m', '5': '\u001b[0;35m', '6': '\u001b[0;33m', '7': '\u001b[0;37m',
+            '8': '\u001b[1;30m', '9': '\u001b[1;34m', 'a': '\u001b[1;32m', 'b': '\u001b[1;36m',
+            'c': '\u001b[1;31m', 'd': '\u001b[1;35m', 'e': '\u001b[1;33m', 'f': '\u001b[1;37m',
+            'r': '\u001b[0m'
+        }
+
+        # Replace standard section codes with ANSI formatting
+        for key, value in color_map.items():
+            text = text.replace(f"§{key}", value)
+            text = text.replace(f"§{key.upper()}", value)
+
+        # Remove extra unsupported text format styles (bold, underline, italic, strikethrough, obfuscated)
+        text = re.sub(r'§[k-oK-O]', '', text)
+        
+        # Reset color string ending
+        return text.strip() + '\u001b[0m'
 
     @app_commands.command(name="mcstatus", description="Query network attributes for a specific Minecraft server instance.")
     @app_commands.rename(address="ip_address")
@@ -23,7 +55,7 @@ class Minecraft(commands.Cog):
             try:
                 server = JavaServer.lookup(address)
                 status = await server.async_status()
-            except Exception as e:
+            except Exception:
                 embed_err = discord.Embed(
                     title="❌ Target Connection Terminated",
                     description=f"Could not connect to `{address}`.\nVerify the IP or check if the host is down.",
@@ -32,19 +64,15 @@ class Minecraft(commands.Cog):
                 await interaction.followup.send(embed=embed_err)
                 return
 
-        motd_text = status.description if isinstance(status.description, str) else status.description.get("text", "")
-        if not motd_text and isinstance(status.description, dict) and "extra" in status.description:
-            motd_text = "".join([part.get("text", "") for part in status.description["extra"]])
-
-        for char in ["§" + c for c in "0123456789abcdefklmnor"]:
-            motd_text = motd_text.replace(char, "")
-        motd_text = motd_text.strip() or "No custom MOTD active."
+        # Process standard color conversions
+        ansi_motd = self.motd_to_ansi(status.description) or "No custom MOTD active."
 
         embed = discord.Embed(title=f"🎮 {address} Status", color=config.COLOR_SUCCESS)
         embed.add_field(name="📌 Host Target IP/Port", value=f"`{server.address.host}:{server.address.port}`", inline=True)
         embed.add_field(name="⚙️ Server Software Version", value=f"`{status.version.name}`", inline=True)
         embed.add_field(name="👥 Population Metrics", value=f"`{status.players.online}/{status.players.max}` players", inline=True)
-        embed.add_field(name="📝 Message of the Day (MOTD)", value=f"```text\n{motd_text}\n```", inline=False)
+        # Using ansi code blocks to bring colors alive
+        embed.add_field(name="📝 Message of the Day (MOTD)", value=f"```ansi\n{ansi_motd}\n```", inline=False)
 
         if status.players.sample:
             player_sample = ", ".join([p.name for p in status.players.sample])
@@ -53,7 +81,7 @@ class Minecraft(commands.Cog):
             embed.add_field(name="👥 Sample Player Activity", value=f"```text\n{player_sample}\n```", inline=False)
 
         file = None
-        # Safe structural check for the updated favicon attribute location
+        # Locate Favicon icon string data inside the host status wrapper
         favicon_data = getattr(status, 'favicon', None)
         if favicon_data and isinstance(favicon_data, str) and "," in favicon_data:
             try:
