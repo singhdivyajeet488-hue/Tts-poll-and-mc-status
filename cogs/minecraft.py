@@ -3,7 +3,7 @@ import io
 import discord
 from discord import app_commands
 from discord.ext import commands
-from mcstatus import JavaServer  # Updated to match the latest mcstatus API
+from mcstatus import JavaServer
 import config
 
 class Minecraft(commands.Cog):
@@ -14,16 +14,13 @@ class Minecraft(commands.Cog):
     @app_commands.rename(address="ip_address")
     @app_commands.describe(address="The IP or domain address of the server (e.g. play.hypixel.net)")
     async def mcstatus(self, interaction: discord.Interaction, address: str) -> None:
-        # Acknowledge interaction because DNS lookups take time
         await interaction.response.defer(thinking=True)
 
         try:
-            # Query standard Java server signature asynchronously using updated JavaServer class
             server = await JavaServer.async_lookup(address)
             status = await server.async_status()
         except Exception:
             try:
-                # Fallback to alternative parsing models for complex configurations
                 server = JavaServer.lookup(address)
                 status = await server.async_status()
             except Exception as e:
@@ -35,27 +32,20 @@ class Minecraft(commands.Cog):
                 await interaction.followup.send(embed=embed_err)
                 return
 
-        # Process clean MOTD lines
         motd_text = status.description if isinstance(status.description, str) else status.description.get("text", "")
         if not motd_text and isinstance(status.description, dict) and "extra" in status.description:
             motd_text = "".join([part.get("text", "") for part in status.description["extra"]])
 
-        # Clean up legacy formatting tags if present
         for char in ["§" + c for c in "0123456789abcdefklmnor"]:
             motd_text = motd_text.replace(char, "")
         motd_text = motd_text.strip() or "No custom MOTD active."
 
-        # Setup base embedding elements
-        embed = discord.Embed(
-            title=f"🎮 {address} Status",
-            color=config.COLOR_SUCCESS
-        )
+        embed = discord.Embed(title=f"🎮 {address} Status", color=config.COLOR_SUCCESS)
         embed.add_field(name="📌 Host Target IP/Port", value=f"`{server.address.host}:{server.address.port}`", inline=True)
         embed.add_field(name="⚙️ Server Software Version", value=f"`{status.version.name}`", inline=True)
         embed.add_field(name="👥 Population Metrics", value=f"`{status.players.online}/{status.players.max}` players", inline=True)
         embed.add_field(name="📝 Message of the Day (MOTD)", value=f"```text\n{motd_text}\n```", inline=False)
 
-        # Attempt to parse specific interactive lists if returned by host
         if status.players.sample:
             player_sample = ", ".join([p.name for p in status.players.sample])
             if len(player_sample) > 1018:
@@ -63,15 +53,16 @@ class Minecraft(commands.Cog):
             embed.add_field(name="👥 Sample Player Activity", value=f"```text\n{player_sample}\n```", inline=False)
 
         file = None
-        # Handle Server Favicon extraction if existing
-        if status.favicon:
+        # Safe structural check for the updated favicon attribute location
+        favicon_data = getattr(status, 'favicon', None)
+        if favicon_data and isinstance(favicon_data, str) and "," in favicon_data:
             try:
-                header, encoded = status.favicon.split(",", 1)
+                header, encoded = favicon_data.split(",", 1)
                 data = base64.b64decode(encoded)
                 file = discord.File(io.BytesIO(data), filename="server_icon.png")
                 embed.set_thumbnail(url="attachment://server_icon.png")
             except Exception:
-                pass  # Suppress errors if favicon encoding parsing fails
+                pass
 
         if file:
             await interaction.followup.send(embed=embed, file=file)
