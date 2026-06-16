@@ -1,86 +1,90 @@
 import re
+import io
 import asyncio
+import requests
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 from mcstatus import JavaServer
+from PIL import Image, ImageDraw, ImageFont
 import config
 
 class Minecraft(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self.active_monitors = {} # Dictionary tracking {message_id: server_address_string}
+        self.active_monitors = {} # Dictionary tracking {message_id: {"address": str, "channel": obj}}
         self.live_monitor_loop.start()
 
     def cog_unload(self):
         self.live_monitor_loop.cancel()
 
-    def motd_to_ansi(self, description) -> str:
-        """Converts Minecraft legacy section formatting codes to Discord codeblock ANSI color spaces."""
-        text = ""
-        if isinstance(description, str):
-            text = description
-        elif isinstance(description, dict):
-            text = description.get("text", "")
-            if "extra" in description:
-                for part in description["extra"]:
-                    if isinstance(part, dict):
-                        text += part.get("text", "")
-                    elif isinstance(part, str):
-                        text += part
+    def strip_color_codes(self, text: str) -> str:
+        """Removes Minecraft's section sign formatting characters for image drawing."""
+        return re.sub(r'§[0-9a-fk-orA-FK-OR]', '', text)
+
+    def generate_server_image(self, address: str, raw_description) -> io.BytesIO:
+        """Generates a high-quality server display image similar to the in-game server list."""
+        lines = []
+        if isinstance(raw_description, dict):
+            text = raw_description.get("text", "")
+            if "extra" in raw_description:
+                text += "".join([part.get("text", "") for part in raw_description["extra"] if isinstance(part, dict)])
+            lines = text.split('\n')
+        elif isinstance(raw_description, str):
+            lines = raw_description.split('\n')
         else:
-            text = str(description)
+            lines = [str(raw_description)]
 
-        # Map Minecraft formatting flags cleanly to ANSI sequences
-        color_map = {
-            '0': '\u001b[0;30m', '1': '\u001b[0;34m', '2': '\u001b[0;32m', '3': '\u001b[0;36m',
-            '4': '\u001b[0;31m', '5': '\u001b[0;35m', '6': '\u001b[0;33m', '7': '\u001b[0;37m',
-            '8': '\u001b[1;30m', '9': '\u001b[1;34m', 'a': '\u001b[1;32m', 'b': '\u001b[1;36m',
-            'c': '\u001b[1;31m', 'd': '\u001b[1;35m', 'e': '\u001b[1;33m', 'f': '\u001b[1;37m',
-            'r': '\u001b[0m'
-        }
+        # Clean formatting tags and isolate the top 2 lines of the MOTD
+        lines = [self.strip_color_codes(line).strip() for line in lines if line.strip()][:2]
+        while len(lines) < 2:
+            lines.append("")
 
-        for key, value in color_map.items():
-            text = text.replace(f"§{key}", value)
-            text = text.replace(f"§{key.upper()}", value)
+        # Create the canvas simulating the dark Minecraft menu background
+        img = Image.new('RGBA', (650, 100), color=(20, 20, 20, 255))
+        draw = ImageDraw.Draw(img)
 
-        # Clear secondary non-color layout modifiers (bold, oblique, etc)
-        text = re.sub(r'§[k-oK-O]', '', text)
-        return text.strip() + '\u001b[0m'
+        # Grab and overlay the server favicon
+        try:
+            icon_url = f"https://api.mcsrvstat.us/icon/{address}"
+            response = requests.get(icon_url, timeout=5)
+            icon_img = Image.open(io.BytesIO(response.content)).convert("RGBA")
+            icon_img = icon_img.resize((64, 64))
+            img.paste(icon_img, (18, 18), icon_img)
+        except Exception:
+            # Fallback dark placeholder if server provides no favicon asset
+            draw.rectangle([18, 18, 82, 82], fill=(45, 45, 45, 255))
 
-    async def fetch_status_embed(self, address: str) -> discord.Embed:
-        """Helper tool to look up server details and wrap them into an embed."""
+        # Render the Text strings
+        draw.text((100, 15), address.upper(), fill=(255, 255, 255))
+        draw.text((100, 42), lines[0], fill=(180, 180, 180))
+        draw.text((100, 65), lines[1], fill=(180, 180, 180))
+
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+        return buffer
+
+    async def fetch_status_embed(self, address: str):
+        """Queries connection strings to collect metadata metrics."""
         try:
             server = await JavaServer.async_lookup(address)
             status = await server.async_status()
             
-            ansi_motd = self.motd_to_ansi(status.description)
-            
-            embed = discord.Embed(title=f"🎮 {address} Live Status", color=config.COLOR_SUCCESS)
-            embed.add_field(name="📌 Host Target IP", value=f"`{server.address.host}:{server.address.port}`", inline=True)
-            embed.add_field(name="⚙️ Software Version", value=f"`{status.version.name}`", inline=True)
+            embed = discord.Embed(title="🎮 Minecraft Server Status Monitor", color=config.COLOR_SUCCESS)
+            embed.add_field(name="📌 Server IP", value=f"`{address}`", inline=True)
+            embed.add_field(name="⚙️ Server Version", value=f"`{status.version.name}`", inline=True)
             embed.add_field(name="👥 Population", value=f"`{status.players.online}/{status.players.max}` players", inline=True)
-            embed.add_field(name="📝 Message of the Day (MOTD)", value=f"```ansi\n{ansi_motd}\n```", inline=False)
-
-            if status.players.sample:
-                player_sample = ", ".join([p.name for p in status.players.sample])
-                if len(player_sample) > 1018:
-                    player_sample = player_sample[:1015] + "..."
-                embed.add_field(name="👥 Active Players", value=f"```text\n{player_sample}\n```", inline=False)
             
-            # Utilizing permanent icon wrapper API to maintain stable thumbnail URLs across asynchronous re-edits
-            icon_url = f"https://api.mcsrvstat.us/icon/{address}"
-            embed.set_thumbnail(url=icon_url)
-            embed.set_footer(text="🔄 Auto-refreshes every 30 seconds live")
-            return embed
-
+            embed.set_footer(text="🔄 Auto-refreshes seamlessly every 30 seconds live")
+            return embed, status.description
         except Exception:
             embed_err = discord.Embed(
-                title="❌ Target Connection Lost",
-                description=f"Could not update status for `{address}`.\nThe server might be down or restarting.",
+                title="❌ Target Connection Terminated",
+                description=f"Could not connect to `{address}`.\nVerify host data or check if server is starting up.",
                 color=config.COLOR_ERROR
             )
-            return embed_err
+            return embed_err, None
 
     @app_commands.command(name="mcstatus", description="Query network attributes for a specific Minecraft server instance.")
     @app_commands.rename(address="ip_address")
@@ -88,10 +92,16 @@ class Minecraft(commands.Cog):
     async def mcstatus(self, interaction: discord.Interaction, address: str) -> None:
         await interaction.response.defer(thinking=True)
         
-        embed = await self.fetch_status_embed(address)
-        await interaction.followup.send(embed=embed)
+        embed, raw_desc = await self.fetch_status_embed(address)
         
-        # Capture the output response message ID to include it in our background task map loop
+        if raw_desc:
+            img_buffer = self.generate_server_image(address, raw_desc)
+            file = discord.File(img_buffer, filename="server_ui.png")
+            embed.set_image(url="attachment://server_ui.png")
+            await interaction.followup.send(embed=embed, file=file)
+        else:
+            await interaction.followup.send(embed=embed)
+        
         original_msg = await interaction.original_response()
         self.active_monitors[original_msg.id] = {
             "address": address,
@@ -100,30 +110,33 @@ class Minecraft(commands.Cog):
 
     @tasks.loop(seconds=30.0)
     async def live_monitor_loop(self):
-        """Background daemon looping continuously every 30 seconds to update old embeds without making new ones."""
+        """Background schedule loops modifying old data panels in place."""
         if not self.active_monitors:
             return
 
-        # Create a copy of keys to avoid modification loops during iterations
         for msg_id, data in list(self.active_monitors.items()):
             try:
                 channel = data["channel"]
                 address = data["address"]
                 
-                # Fetch the message structure out from Discord's active channel caches
                 try:
                     message = await channel.fetch_message(msg_id)
                 except discord.NotFound:
-                    # Clear target reference if the tracking post was deleted by a user
                     del self.active_monitors[msg_id]
                     continue
                 
-                # Render updated dataset
-                new_embed = await self.fetch_status_embed(address)
-                await message.edit(embed=new_embed)
+                embed, raw_desc = await self.fetch_status_embed(address)
                 
+                if raw_desc:
+                    img_buffer = self.generate_server_image(address, raw_desc)
+                    file = discord.File(img_buffer, filename="server_ui.png")
+                    embed.set_image(url="attachment://server_ui.png")
+                    await message.edit(embed=embed, attachments=[file])
+                else:
+                    await message.edit(embed=embed)
+                    
             except Exception as e:
-                print(f"Error occurring inside live monitor scheduler thread: {e}")
+                print(f"Error occurring inside background update routine loop: {e}")
 
     @live_monitor_loop.before_loop
     async def before_live_monitor_loop(self):
