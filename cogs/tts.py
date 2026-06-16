@@ -23,7 +23,6 @@ class TTS(commands.Cog):
         self.guild_states: Dict[int, VoiceStateTracker] = {}
 
     def get_ffmpeg_binary(self) -> str:
-        """Locates the raw path where the system environment built FFmpeg."""
         for path in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg"]:
             if path != "ffmpeg" and os.path.exists(path):
                 return path
@@ -51,8 +50,6 @@ class TTS(commands.Cog):
 
                     audio_stream = io.BytesIO(audio_data)
                     ffmpeg_exe = self.get_ffmpeg_binary()
-                    
-                    # Direct binary pipe routing to bypass system environment path issues
                     source = discord.FFmpegPCMAudio(audio_stream, pipe=True, executable=ffmpeg_exe)
 
                     vc.play(source)
@@ -123,12 +120,7 @@ class TTS(commands.Cog):
         if state and message.channel.id == state.text_channel_id:
             vc: Optional[discord.VoiceClient] = message.guild.voice_client # type: ignore
             if vc and vc.is_connected():
-                # Verify that message text isn't executing an internal text prefix command
-                prefix = "!"
-                if self.bot.command_prefix and isinstance(self.bot.command_prefix, str):
-                    prefix = self.bot.command_prefix
-                
-                if message.content.startswith(prefix):
+                if message.content.startswith("/"):
                     return
 
                 spoken_content = f"{message.author.display_name} says: {message.clean_content}"
