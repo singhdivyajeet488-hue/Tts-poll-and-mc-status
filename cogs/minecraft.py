@@ -3,7 +3,7 @@ import io
 import discord
 from discord import app_commands
 from discord.ext import commands
-from mcstatus import MinecraftServer
+from mcstatus import JavaServer  # Updated to match the latest mcstatus API
 import config
 
 class Minecraft(commands.Cog):
@@ -18,13 +18,13 @@ class Minecraft(commands.Cog):
         await interaction.response.defer(thinking=True)
 
         try:
-            # Query standard Java server signature asynchronously
-            server = await MinecraftServer.async_lookup(address)
+            # Query standard Java server signature asynchronously using updated JavaServer class
+            server = await JavaServer.async_lookup(address)
             status = await server.async_status()
         except Exception:
             try:
                 # Fallback to alternative parsing models for complex configurations
-                server = MinecraftServer.lookup(address)
+                server = JavaServer.lookup(address)
                 status = await server.async_status()
             except Exception as e:
                 embed_err = discord.Embed(
@@ -50,7 +50,7 @@ class Minecraft(commands.Cog):
             title=f"🎮 {address} Status",
             color=config.COLOR_SUCCESS
         )
-        embed.add_field(name="📌 Host Target IP/Port", value=f"`{server.host}:{server.port}`", inline=True)
+        embed.add_field(name="📌 Host Target IP/Port", value=f"`{server.address.host}:{server.address.port}`", inline=True)
         embed.add_field(name="⚙️ Server Software Version", value=f"`{status.version.name}`", inline=True)
         embed.add_field(name="👥 Population Metrics", value=f"`{status.players.online}/{status.players.max}` players", inline=True)
         embed.add_field(name="📝 Message of the Day (MOTD)", value=f"```text\n{motd_text}\n```", inline=False)
