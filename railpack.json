@@ -1,6 +1,8 @@
 {
-  "packages": {
-    "ffmpeg": "*",
-    "libopus-dev": "*"
+  "apt": {
+    "packages": [
+      "ffmpeg",
+      "libopus-dev"
+    ]
   }
 }
