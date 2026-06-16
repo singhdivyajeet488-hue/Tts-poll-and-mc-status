@@ -1,6 +1,6 @@
 {
-  "packages": [
-    "ffmpeg",
-    "libopus-dev"
-  ]
+  "packages": {
+    "ffmpeg": "*",
+    "libopus-dev": "*"
+  }
 }
