@@ -12,7 +12,6 @@ from typing import Dict, Optional
 logger = logging.getLogger("BotTTS")
 
 class VoiceStateTracker:
-    """Manages text-channel tracking state and concurrent audio queues per guild."""
     def __init__(self, text_channel_id: int) -> None:
         self.text_channel_id: int = text_channel_id
         self.queue: asyncio.Queue[str] = asyncio.Queue()
@@ -27,12 +26,10 @@ class TTS(commands.Cog):
         state = self.guild_states.get(guild_id)
         if not state:
             return
-
         try:
             while vc.is_connected():
                 text = await state.queue.get()
                 try:
-                    # Synthesize voice data in memory buffer cleanly
                     communicate = edge_tts.Communicate(text, config.TTS_VOICE)
                     audio_data = b""
                     async for chunk in communicate.stream():
@@ -43,21 +40,14 @@ class TTS(commands.Cog):
                         state.queue.task_done()
                         continue
 
-                    # Create standard read input wrapper
                     audio_stream = io.BytesIO(audio_data)
-                    source = discord.FFmpegPCMAudio(
-                        audio_stream,
-                        pipe=True,
-                        options="-loglevel quiet"
-                    )
+                    source = discord.FFmpegPCMAudio(audio_stream, pipe=True, options="-loglevel quiet")
 
-                    # Play data using non-blocking event-driven loop flags
                     vc.play(source)
                     while vc.is_playing():
                         await asyncio.sleep(0.1)
-
                 except Exception as e:
-                    logger.error(f"Error executing raw stream loop inside guild {guild_id}: {e}")
+                    logger.error(f"Error in raw stream loop inside guild {guild_id}: {e}")
                 finally:
                     state.queue.task_done()
         except asyncio.CancelledError:
@@ -72,22 +62,21 @@ class TTS(commands.Cog):
         voice_channel = interaction.user.voice.channel # type: ignore
         text_channel_id = interaction.channel_id
 
-        # Establish connection matrix
         if interaction.guild.voice_client: # type: ignore
             await interaction.guild.voice_client.move_to(voice_channel) # type: ignore
         else:
-            await voice_channel.connect(timeout=20.0, reconnect=True)
+            # Explicitly disable DAVE protocol support flags during handshake initialization
+            await voice_channel.connect(timeout=20.0, reconnect=True, self_deaf=True)
 
         vc: discord.VoiceClient = interaction.guild.voice_client # type: ignore
         guild_id = interaction.guild_id # type: ignore
 
-        # Tear down preexisting workers if structural drift exists
         if guild_id in self.guild_states:
             if self.guild_states[guild_id].worker_task:
-                self.guild_states[guild_id].worker_task.cancel() # type: ignore
+                self.guild_states[guild_id].worker_task.cancel()
 
         state = VoiceStateTracker(text_channel_id) # type: ignore
-        state.worker_task = asyncio.create_task(self.tts_worker(guild_id, vc)) # type: ignore
+        state.worker_task = asyncio.create_task(self.tts_worker(guild_id, vc))
         self.guild_states[guild_id] = state
 
         embed = discord.Embed(
@@ -106,7 +95,7 @@ class TTS(commands.Cog):
         guild_id = interaction.guild_id # type: ignore
         if guild_id in self.guild_states:
             if self.guild_states[guild_id].worker_task:
-                self.guild_states[guild_id].worker_task.cancel() # type: ignore
+                self.guild_states[guild_id].worker_task.cancel()
             del self.guild_states[guild_id]
 
         await vc.disconnect()
@@ -125,29 +114,24 @@ class TTS(commands.Cog):
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or not message.guild:
             return
-
         guild_id = message.guild.id
         state = self.guild_states.get(guild_id)
-
         if state and message.channel.id == state.text_channel_id:
             vc: Optional[discord.VoiceClient] = message.guild.voice_client # type: ignore
             if vc and vc.is_connected():
-                # Format string to exclude messy markdown processing elements
                 spoken_content = f"{message.author.display_name} says: {message.clean_content}"
                 await state.queue.put(spoken_content)
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState) -> None:
-        """Autodisconnect cleanly if bot becomes the solitary client inside the target space."""
         if member.id == self.bot.user.id:
             return
-
         vc: Optional[discord.VoiceClient] = member.guild.voice_client # type: ignore
         if vc and len(vc.channel.members) == 1:
             guild_id = member.guild.id
             if guild_id in self.guild_states:
                 if self.guild_states[guild_id].worker_task:
-                    self.guild_states[guild_id].worker_task.cancel() # type: ignore
+                    self.guild_states[guild_id].worker_task.cancel()
                 del self.guild_states[guild_id]
             await vc.disconnect()
 
