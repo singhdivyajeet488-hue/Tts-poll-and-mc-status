@@ -1,7 +1,7 @@
 import os
+import io
 import shutil
 import asyncio
-import io
 import logging
 import discord
 from discord import app_commands
@@ -22,21 +22,14 @@ class TTS(commands.Cog):
         self.bot = bot
         self.guild_states: Dict[int, VoiceStateTracker] = {}
 
-    def get_ffmpeg_executable(self) -> str:
-        """Determines the absolute location of the system FFmpeg binary wrapper."""
-        # Check explicit pathing layers or fall back to system lookups
-        env_path = os.getenv("FFMPEG_PATH", "/usr/bin/ffmpeg")
-        if os.path.exists(env_path):
-            return env_path
-        
-        fallback = shutil.which("ffmpeg")
-        if fallback:
-            return fallback
-            
-        # Common structural paths for cloud container engines
-        for common_loc in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/opt/homebrew/bin/ffmpeg"]:
-            if os.path.exists(common_loc):
-                return common_loc
+    def get_ffmpeg_binary(self) -> str:
+        """Locates the raw path where the system environment built FFmpeg."""
+        for path in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg"]:
+            if path != "ffmpeg" and os.path.exists(path):
+                return path
+        system_lookup = shutil.which("ffmpeg")
+        if system_lookup:
+            return system_lookup
         return "ffmpeg"
 
     async def tts_worker(self, guild_id: int, vc: discord.VoiceClient) -> None:
@@ -54,14 +47,13 @@ class TTS(commands.Cog):
                             audio_data += chunk["data"]
 
                     if not audio_data:
-                        state.queue.task_done()
                         continue
 
                     audio_stream = io.BytesIO(audio_data)
-                    ffmpeg_bin = self.get_ffmpeg_executable()
+                    ffmpeg_exe = self.get_ffmpeg_binary()
                     
-                    # Pass the localized path directly into the processing engine
-                    source = discord.FFmpegPCMAudio(audio_stream, pipe=True, executable=ffmpeg_bin)
+                    # Direct binary pipe routing to bypass system environment path issues
+                    source = discord.FFmpegPCMAudio(audio_stream, pipe=True, executable=ffmpeg_exe)
 
                     vc.play(source)
                     while vc.is_playing():
@@ -73,12 +65,12 @@ class TTS(commands.Cog):
         except asyncio.CancelledError:
             pass
 
-    @app_commands.command(name="join", description="Connect bot to your present voice channel.")
+    @app_commands.command(name="join", description="Connect the bot to your current voice channel.")
     async def join(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
 
         if not interaction.user.voice or not interaction.user.voice.channel: # type: ignore
-            await interaction.followup.send("❌ Connect to a voice channel first!")
+            await interaction.followup.send("❌ You must join a voice channel first!")
             return
 
         voice_channel = interaction.user.voice.channel # type: ignore
@@ -104,13 +96,13 @@ class TTS(commands.Cog):
         state.worker_task = asyncio.create_task(self.tts_worker(guild_id, vc))
         self.guild_states[guild_id] = state
 
-        await interaction.followup.send(f"🎙️ Joined **{voice_channel.name}** and linked to this channel!")
+        await interaction.followup.send(f"🎙️ Joined **{voice_channel.name}** and linked text tracking to this channel!")
 
-    @app_commands.command(name="leave", description="Disconnect bot from voice.")
+    @app_commands.command(name="leave", description="Disconnect the bot from voice.")
     async def leave(self, interaction: discord.Interaction) -> None:
         vc: Optional[discord.VoiceClient] = interaction.guild.voice_client # type: ignore
         if not vc:
-            await interaction.response.send_message("❌ Not in voice.", ephemeral=True)
+            await interaction.response.send_message("❌ I am not in a voice channel.", ephemeral=True)
             return
 
         guild_id = interaction.guild_id # type: ignore
@@ -126,10 +118,19 @@ class TTS(commands.Cog):
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or not message.guild:
             return
+            
         state = self.guild_states.get(message.guild.id)
         if state and message.channel.id == state.text_channel_id:
             vc: Optional[discord.VoiceClient] = message.guild.voice_client # type: ignore
             if vc and vc.is_connected():
+                # Verify that message text isn't executing an internal text prefix command
+                prefix = "!"
+                if self.bot.command_prefix and isinstance(self.bot.command_prefix, str):
+                    prefix = self.bot.command_prefix
+                
+                if message.content.startswith(prefix):
+                    return
+
                 spoken_content = f"{message.author.display_name} says: {message.clean_content}"
                 await state.queue.put(spoken_content)
 
