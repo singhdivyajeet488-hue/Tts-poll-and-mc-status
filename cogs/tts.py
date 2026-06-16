@@ -5,7 +5,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import edge_tts
-import config
 from typing import Dict, Optional
 
 logger = logging.getLogger("BotTTS")
@@ -29,7 +28,7 @@ class TTS(commands.Cog):
             while vc.is_connected():
                 text = await state.queue.get()
                 try:
-                    communicate = edge_tts.Communicate(text, config.TTS_VOICE)
+                    communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
                     audio_data = b""
                     async for chunk in communicate.stream():
                         if chunk["type"] == "audio":
@@ -40,17 +39,17 @@ class TTS(commands.Cog):
                         continue
 
                     audio_stream = io.BytesIO(audio_data)
-                    source = discord.FFmpegPCMAudio(audio_stream, pipe=True, options="-loglevel quiet")
+                    source = discord.FFmpegPCMAudio(audio_stream, pipe=True)
 
                     vc.play(source)
                     while vc.is_playing():
                         await asyncio.sleep(0.1)
                 except Exception as e:
-                    logger.error(f"Error in raw stream loop inside guild {guild_id}: {e}")
+                    logger.error(f"Error in raw stream loop: {e}")
                 finally:
                     state.queue.task_done()
         except asyncio.CancelledError:
-            logger.info(f"Worker task canceled for guild {guild_id}")
+            pass
 
     @app_commands.command(name="join", description="Connect bot to your present voice channel.")
     async def join(self, interaction: discord.Interaction) -> None:
@@ -69,7 +68,7 @@ class TTS(commands.Cog):
             else:
                 await voice_channel.connect(timeout=20.0, reconnect=True)
         except Exception as e:
-            await interaction.followup.send(f"❌ Failed to connect to voice channel: {e}")
+            await interaction.followup.send(f"❌ Failed to connect: {e}")
             return
 
         vc: discord.VoiceClient = interaction.guild.voice_client # type: ignore
@@ -83,17 +82,13 @@ class TTS(commands.Cog):
         state.worker_task = asyncio.create_task(self.tts_worker(guild_id, vc))
         self.guild_states[guild_id] = state
 
-        embed = discord.Embed(
-            description=f"🎙️ Joined **{voice_channel.name}**\n📝 Bound tracking context to text-channel <#{text_channel_id}>",
-            color=config.COLOR_SUCCESS
-        )
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(f"🎙️ Joined **{voice_channel.name}** and linked to this channel!")
 
-    @app_commands.command(name="leave", description="Disconnect bot from current Voice server instance.")
+    @app_commands.command(name="leave", description="Disconnect bot from voice.")
     async def leave(self, interaction: discord.Interaction) -> None:
         vc: Optional[discord.VoiceClient] = interaction.guild.voice_client # type: ignore
-        if not vc or not vc.is_connected():
-            await interaction.response.send_message("❌ Active voice link instances do not exist.", ephemeral=True)
+        if not vc:
+            await interaction.response.send_message("❌ Not in voice.", ephemeral=True)
             return
 
         guild_id = interaction.guild_id # type: ignore
@@ -103,41 +98,18 @@ class TTS(commands.Cog):
             del self.guild_states[guild_id]
 
         await vc.disconnect()
-        await interaction.response.send_message("👋 Safely disconnected from voice streams.")
-
-    @app_commands.command(name="stoptts", description="Immediately halt ongoing audio synthesis execution.")
-    async def stoptts(self, interaction: discord.Interaction) -> None:
-        vc: Optional[discord.VoiceClient] = interaction.guild.voice_client # type: ignore
-        if vc and vc.is_playing():
-            vc.stop()
-            await interaction.response.send_message("🛑 Clear audio buffers. Current track terminated.")
-        else:
-            await interaction.response.send_message("❌ No audio streams are currently playing.", ephemeral=True)
+        await interaction.response.send_message("👋 Left the voice channel.")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or not message.guild:
             return
-        guild_id = message.guild.id
-        state = self.guild_states.get(guild_id)
+        state = self.guild_states.get(message.guild.id)
         if state and message.channel.id == state.text_channel_id:
             vc: Optional[discord.VoiceClient] = message.guild.voice_client # type: ignore
             if vc and vc.is_connected():
                 spoken_content = f"{message.author.display_name} says: {message.clean_content}"
                 await state.queue.put(spoken_content)
-
-    @commands.Cog.listener()
-    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState) -> None:
-        if member.id == self.bot.user.id:
-            return
-        vc: Optional[discord.VoiceClient] = member.guild.voice_client # type: ignore
-        if vc and len(vc.channel.members) == 1:
-            guild_id = member.guild.id
-            if guild_id in self.guild_states:
-                if self.guild_states[guild_id].worker_task:
-                    self.guild_states[guild_id].worker_task.cancel()
-                del self.guild_states[guild_id]
-            await vc.disconnect()
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(TTS(bot))
