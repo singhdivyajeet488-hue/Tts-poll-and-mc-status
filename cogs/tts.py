@@ -1,7 +1,6 @@
 import asyncio
 import io
 import logging
-import os
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -55,18 +54,23 @@ class TTS(commands.Cog):
 
     @app_commands.command(name="join", description="Connect bot to your present voice channel.")
     async def join(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+
         if not interaction.user.voice or not interaction.user.voice.channel: # type: ignore
-            await interaction.response.send_message("❌ Connect to a voice channel first!", ephemeral=True)
+            await interaction.followup.send("❌ Connect to a voice channel first!")
             return
 
         voice_channel = interaction.user.voice.channel # type: ignore
         text_channel_id = interaction.channel_id
 
-        if interaction.guild.voice_client: # type: ignore
-            await interaction.guild.voice_client.move_to(voice_channel) # type: ignore
-        else:
-            # Explicitly disable DAVE protocol support flags during handshake initialization
-            await voice_channel.connect(timeout=20.0, reconnect=True, self_deaf=True)
+        try:
+            if interaction.guild.voice_client: # type: ignore
+                await interaction.guild.voice_client.move_to(voice_channel) # type: ignore
+            else:
+                await voice_channel.connect(timeout=20.0, reconnect=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Failed to connect to voice channel: {e}")
+            return
 
         vc: discord.VoiceClient = interaction.guild.voice_client # type: ignore
         guild_id = interaction.guild_id # type: ignore
@@ -83,7 +87,7 @@ class TTS(commands.Cog):
             description=f"🎙️ Joined **{voice_channel.name}**\n📝 Bound tracking context to text-channel <#{text_channel_id}>",
             color=config.COLOR_SUCCESS
         )
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="leave", description="Disconnect bot from current Voice server instance.")
     async def leave(self, interaction: discord.Interaction) -> None:
