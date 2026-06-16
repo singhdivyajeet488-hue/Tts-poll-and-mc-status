@@ -1,0 +1,8 @@
+[providers]
+python = {}
+
+[phases.setup]
+aptPkgs = ["ffmpeg", "libopus-dev"]
+
+[variables]
+FFMPEG_PATH = "/usr/bin/ffmpeg"
