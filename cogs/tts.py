@@ -1,3 +1,5 @@
+import os
+import shutil
 import asyncio
 import io
 import logging
@@ -20,6 +22,23 @@ class TTS(commands.Cog):
         self.bot = bot
         self.guild_states: Dict[int, VoiceStateTracker] = {}
 
+    def get_ffmpeg_executable(self) -> str:
+        """Determines the absolute location of the system FFmpeg binary wrapper."""
+        # Check explicit pathing layers or fall back to system lookups
+        env_path = os.getenv("FFMPEG_PATH", "/usr/bin/ffmpeg")
+        if os.path.exists(env_path):
+            return env_path
+        
+        fallback = shutil.which("ffmpeg")
+        if fallback:
+            return fallback
+            
+        # Common structural paths for cloud container engines
+        for common_loc in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/opt/homebrew/bin/ffmpeg"]:
+            if os.path.exists(common_loc):
+                return common_loc
+        return "ffmpeg"
+
     async def tts_worker(self, guild_id: int, vc: discord.VoiceClient) -> None:
         state = self.guild_states.get(guild_id)
         if not state:
@@ -39,7 +58,10 @@ class TTS(commands.Cog):
                         continue
 
                     audio_stream = io.BytesIO(audio_data)
-                    source = discord.FFmpegPCMAudio(audio_stream, pipe=True)
+                    ffmpeg_bin = self.get_ffmpeg_executable()
+                    
+                    # Pass the localized path directly into the processing engine
+                    source = discord.FFmpegPCMAudio(audio_stream, pipe=True, executable=ffmpeg_bin)
 
                     vc.play(source)
                     while vc.is_playing():
