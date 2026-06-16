@@ -18,14 +18,13 @@ class Minecraft(commands.Cog):
         self.live_monitor_loop.cancel()
 
     def parse_motd_components(self, description):
-        """Extracts text and color codes from complex Minecraft MOTD schemas."""
+        """Extracts text strings and matches them with true hexadecimal RGB tuples."""
         color_map = {
             '0': (0, 0, 0), '1': (0, 0, 170), '2': (0, 170, 0), '3': (0, 170, 170),
             '4': (170, 0, 0), '5': (170, 0, 170), '6': (255, 170, 0), '7': (170, 170, 170),
             '8': (85, 85, 85), '9': (85, 85, 255), 'a': (85, 255, 85), 'b': (85, 255, 255),
             'c': (255, 85, 85), 'd': (255, 85, 255), 'e': (255, 255, 85), 'f': (255, 255, 255)
         }
-        
         parsed_parts = []
         default_color = (255, 255, 255)
 
@@ -38,8 +37,11 @@ class Minecraft(commands.Cog):
                 if isinstance(part, dict):
                     txt = part.get("text", "")
                     color_name = part.get("color", "white")
-                    # Basic fallback translation map for text fields
-                    named_colors = {"red": (255, 85, 85), "gold": (255, 170, 0), "yellow": (255, 255, 85), "green": (85, 255, 85), "aqua": (85, 255, 255), "blue": (85, 85, 255), "light_purple": (255, 85, 255)}
+                    named_colors = {
+                        "red": (255, 85, 85), "gold": (255, 170, 0), "yellow": (255, 255, 85), 
+                        "green": (85, 255, 85), "aqua": (85, 255, 255), "blue": (85, 85, 255), 
+                        "light_purple": (255, 85, 255), "gray": (170, 170, 170), "dark_purple": (170, 0, 170)
+                    }
                     col = named_colors.get(color_name.lower(), default_color)
                     if txt:
                         parsed_parts.append((txt, col))
@@ -55,11 +57,14 @@ class Minecraft(commands.Cog):
         return parsed_parts
 
     def generate_server_image(self, address: str, raw_description, status) -> io.BytesIO:
-        """Draws a true 1:1 replica image layout modeled exactly after the in-game multiplayer tab."""
+        """Creates a pixel-perfect image simulation of a real Minecraft multiplayer menu entry."""
         img = Image.new('RGBA', (750, 110), color=(18, 18, 18, 255))
         draw = ImageDraw.Draw(img)
 
-        # Download and apply favicon
+        # Draw clean crisp borders around the mock server item
+        draw.rectangle([0, 0, 749, 109], outline=(45, 45, 45, 255), width=1)
+
+        # Download and embed favicon
         try:
             icon_url = f"https://api.mcsrvstat.us/icon/{address}"
             res = requests.get(icon_url, timeout=4)
@@ -68,21 +73,23 @@ class Minecraft(commands.Cog):
         except Exception:
             draw.rectangle([16, 19, 88, 91], fill=(40, 40, 40, 255))
 
-        # Attempt to bind your uploaded pixel fonts, fallback gracefully if not built yet
+        # Hook standard Minecraft pixel typography
         try:
             font_title = ImageFont.truetype("Minecraftia.ttf", 18)
             font_motd = ImageFont.truetype("Minecraftia.ttf", 15)
         except Exception:
             font_title = font_motd = ImageFont.load_default()
 
-        # Render Title / IP Address details
+        # Render connection target address
         draw.text((105, 16), address.upper(), fill=(255, 255, 255), font=font_title)
 
-        # Render active Player Count stats
-        players_str = f"{status.players.online}/{status.players.max}"
-        draw.text((734 - draw.textlength(players_str, font=font_motd), 16), players_str, fill=(170, 170, 170), font=font_motd)
+        # Render mock signal latency strength bars
+        for i in range(5):
+            x_bar = 720 + (i * 4)
+            y_offset = 24 - (i * 3)
+            draw.rectangle([x_bar, y_offset, x_bar + 2, 26], fill=(85, 255, 85, 255))
 
-        # Process complex MOTD items line by line
+        # Parse and process color sequences line-by-line
         motd_components = self.parse_motd_components(raw_description)
         x_cursor, y_cursor = 105, 46
         
@@ -93,12 +100,12 @@ class Minecraft(commands.Cog):
                     if idx > 0:
                         x_cursor = 105
                         y_cursor += 22
-                    if y_cursor > 80:
+                    if y_cursor > 82:
                         break
                     draw.text((x_cursor, y_cursor), line, fill=rgb_color, font=font_motd)
                     x_cursor += int(draw.textlength(line, font=font_motd))
             else:
-                if y_cursor > 80:
+                if y_cursor > 82:
                     break
                 draw.text((x_cursor, y_cursor), text_segment, fill=rgb_color, font=font_motd)
                 x_cursor += int(draw.textlength(text_segment, font=font_motd))
@@ -109,16 +116,19 @@ class Minecraft(commands.Cog):
         return buffer
 
     async def fetch_status_embed(self, address: str):
+        """Looks up the target server data and returns an organized status embed."""
         try:
             server = await JavaServer.async_lookup(address)
             status = await server.async_status()
-            embed = discord.Embed(title="🎮 Server Status", color=discord.Color.green())
+            
+            embed = discord.Embed(title="🎮 Minecraft Server Connection Panel", color=discord.Color.green())
+            embed.add_field(name="📌 Server IP", value=f"`{address}`", inline=True)
             embed.add_field(name="⚙️ Server Version", value=f"`{status.version.name}`", inline=True)
-            embed.add_field(name="🔗 Host Domain IP", value=f"`{address}`", inline=True)
-            embed.set_footer(text="🔄 Live updating background loop active (30s intervals)")
+            embed.add_field(name="👥 Members", value=f"`{status.players.online}/{status.players.max}` playing", inline=True)
+            embed.set_footer(text="🔄 Seamlessly updating background loop active (30s intervals)")
             return embed, status.description, status
         except Exception:
-            embed_err = discord.Embed(title="❌ Connection Offline", description=f"Could not connect to `{address}`.", color=discord.Color.red())
+            embed_err = discord.Embed(title="❌ Connection Terminated", description=f"Could not connect to `{address}`.", color=discord.Color.red())
             return embed_err, None, None
 
     @app_commands.command(name="mcstatus", description="Query network attributes for a specific Minecraft server instance.")
@@ -130,6 +140,7 @@ class Minecraft(commands.Cog):
         if raw_desc:
             img_buffer = self.generate_server_image(address, raw_desc, status)
             file = discord.File(img_buffer, filename="server_ui.png")
+            # Anchor the graphic at the top of the description card
             embed.set_image(url="attachment://server_ui.png")
             await interaction.followup.send(embed=embed, file=file)
         else:
