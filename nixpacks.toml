@@ -1,3 +1,5 @@
+[providers]
+python = {}
+
 [phases.setup]
 aptPkgs = ["ffmpeg", "libopus-dev"]
-nixPkgs = ["gcc"]
