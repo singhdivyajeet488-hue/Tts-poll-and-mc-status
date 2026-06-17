@@ -9,7 +9,6 @@ intents.message_content = True
 intents.guilds = True
 intents.voice_states = True
 
-# Fallback safely to a clean string so discord.py never throws a NoneType error
 bot_prefix = "!"
 if hasattr(config, "PREFIX") and config.PREFIX:
     bot_prefix = str(config.PREFIX)
@@ -20,6 +19,11 @@ bot = commands.Bot(command_prefix=bot_prefix, intents=intents, help_command=None
 async def on_ready():
     print(f"[INFO] BotMain: Logged in as {bot.user} (ID: {bot.user.id})")
     try:
+        # Cogs load karna
+        await load_extensions()
+        
+        # Commands sync karna
+        bot.tree.clear_commands(guild=None)
         synced = await bot.tree.sync()
         print(f"[INFO] BotMain: Successfully synced {len(synced)} slash commands globally.")
     except Exception as e:
@@ -36,8 +40,6 @@ async def load_extensions():
 
 async def main():
     async with bot:
-        await load_extensions()
-        # Ensure token fallback works cleanly
         token = os.getenv("DISCORD_TOKEN") or getattr(config, "TOKEN", None)
         if not token:
             raise ValueError("No discord token found in Environment or config.py!")
