@@ -19,10 +19,10 @@ bot = commands.Bot(command_prefix=bot_prefix, intents=intents, help_command=None
 async def on_ready():
     print(f"[INFO] BotMain: Logged in as {bot.user} (ID: {bot.user.id})")
     try:
-        # Cogs load karna
+        # Extensions load karein
         await load_extensions()
         
-        # Commands sync karna
+        # Commands sync karein
         bot.tree.clear_commands(guild=None)
         synced = await bot.tree.sync()
         print(f"[INFO] BotMain: Successfully synced {len(synced)} slash commands globally.")
