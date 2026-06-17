@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import edge_tts
 import io
@@ -6,7 +7,7 @@ import asyncio
 import discord.opus
 import os
 
-# Library path fix for Railway/Docker
+# Docker container ke liye library path fix
 try:
     discord.opus.load_opus('/usr/lib/x86_64-linux-gnu/libopus.so.0')
 except Exception as e:
@@ -15,20 +16,27 @@ except Exception as e:
 class TTS(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # FFMPEG path for Docker
         self.ffmpeg_path = "/usr/bin/ffmpeg"
 
-    @commands.command(name="join")
-    async def join(self, ctx):
-        if ctx.author.voice:
-            channel = ctx.author.voice.channel
+    @app_commands.command(name="join", description="Bot ko voice channel mein join karayein")
+    async def join(self, interaction: discord.Interaction):
+        if interaction.user.voice:
+            channel = interaction.user.voice.channel
             try:
                 await channel.connect()
-                await ctx.send("Connected!")
+                await interaction.response.send_message("🎙️ Voice channel mein connect ho gaya!")
             except Exception as e:
-                await ctx.send(f"Error: {e}")
+                await interaction.response.send_message(f"❌ Failed to connect: {str(e)}")
         else:
-            await ctx.send("Pehle voice channel mein jao!")
+            await interaction.response.send_message("Pehle kisi voice channel mein toh jao!")
+
+    @app_commands.command(name="leave", description="Bot ko voice channel se bahar nikalen")
+    async def leave(self, interaction: discord.Interaction):
+        if interaction.guild.voice_client:
+            await interaction.guild.voice_client.disconnect()
+            await interaction.response.send_message("👋 Chalo, main nikal gaya.")
+        else:
+            await interaction.response.send_message("Main kisi channel mein hoon hi nahi!")
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -42,7 +50,6 @@ class TTS(commands.Cog):
             if chunk["type"] == "audio":
                 audio_data += chunk["data"]
         
-        # Path explicitly pass karna zaroori hai
         source = discord.FFmpegPCMAudio(
             io.BytesIO(audio_data), 
             pipe=True, 
